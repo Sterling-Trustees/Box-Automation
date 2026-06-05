@@ -1,0 +1,17 @@
+.env
+token.json
+index_cache.json
+checklist_cache.xlsx
+
+__pycache__/
+*.py[cod]
+*.pyo
+.venv/
+venv/
+*.egg-info/
+dist/
+build/
+
+*.log
+.DS_Store
+Thumbs.db
