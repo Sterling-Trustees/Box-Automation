@@ -142,16 +142,17 @@ class LiveIndex:
                 self._index = cached
             logger.info("Index loaded from cache: %d accounts", len(self._index))
         else:
-            self._rebuild()
+            self._rebuild(refresh_excel=False)
 
-    def _rebuild(self) -> None:
+    def _rebuild(self, refresh_excel: bool = True) -> None:
         if not self._rebuild_lock.acquire(blocking=False):
             self._rebuild_lock.acquire()
             self._rebuild_lock.release()
             return
         try:
             logger.info("Rebuilding Box index and refreshing Excel from Box...")
-            self._refresh_excel()
+            if refresh_excel:
+                self._refresh_excel()
             new_index = self._builder.build()
             with self._lock:
                 self._index = new_index
