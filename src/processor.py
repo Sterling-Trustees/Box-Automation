@@ -23,13 +23,10 @@ class StatementProcessor:
             logger.error("[%s] %s", pdf_path.name, exc)
 
     def _run(self, pdf_path: Path) -> None:
-        if not self._parser.is_custodial_statement(pdf_path):
-            logger.info("Skipped (not a custodial statement): %s", pdf_path.name)
-            return
         info = self._parser.parse(pdf_path)
         logger.info("Provider=%s  Account=...%s  Date=%s", info.provider, info.account_number[-4:], info.statement_date)
 
-        entry = self._index.lookup(info.account_number)
+        entry = self._index.lookup(info.account_number, provider=info.provider, trust_name=info.trust_name or "")
         if not entry:
             raise IndexLookupError(
                 f"Account ending ...{info.account_number[-4:]} not found in index. "

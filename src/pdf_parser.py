@@ -32,7 +32,7 @@ class PDFParser:
                 "content": (
                     "Is this document a custodial investment or financial statement "
                     "from a brokerage or financial institution (e.g. Schwab, Fidelity, "
-                    "Morgan Stanley, Pershing)? Answer YES or NO only.\n\n"
+                    "Morgan Stanley, Pershing, or any other)? Answer YES or NO only.\n\n"
                     f"Document text:\n---\n{text[:2000]}\n---"
                 ),
             }],
@@ -61,22 +61,27 @@ class PDFParser:
         "Always respond with a single valid JSON object and nothing else — no markdown, no explanation, no extra text. "
         "If a field cannot be determined with confidence, use null.\n\n"
         "CRITICAL — provider extraction rules:\n"
-        "The provider is the CUSTODIAN or BROKERAGE INSTITUTION that holds the investment account — "
-        "the company whose name appears on the letterhead or logo of the statement. "
-        "Common examples: Morgan Stanley, Charles Schwab, Schwab, Fidelity, Pershing, "
-        "Wells Fargo, JP Morgan, UBS, TD Ameritrade, Vanguard, BlackRock, BNY Mellon, "
-        "First Western Bank, Interactive Brokers, Transamerica.\n"
-        "Do NOT use the trustee company name (e.g. Sterling Trustees, Sterling Trustee, "
-        "any company with 'Trustee' or 'Trust Company' in its name) — that is the trust manager, "
-        "not the custodian. It typically appears in the mailing address block, not the letterhead."
+        "The provider is the financial institution, fund manager, or investment firm whose name "
+        "appears on the LETTERHEAD or LOGO at the top of the statement — the entity that ISSUED this document. "
+        "For brokerage statements: Morgan Stanley, Charles Schwab, Fidelity, Pershing, Wells Fargo, "
+        "JP Morgan, UBS, TD Ameritrade, Vanguard, BlackRock, BNY Mellon, Interactive Brokers, Transamerica. "
+        "For fund statements: the fund manager or fund name shown on the letterhead (e.g. Fourthstone, "
+        "Hamilton Lane, KKR, Apollo, Blackstone). "
+        "Do NOT use the trust or client name (e.g. 'The Beethoven Trust', 'Camden Trust') — that is the account holder. "
+        "Do NOT use the trustee company name (e.g. Sterling Trustees, any company with 'Trustee' or 'Trust Company') — "
+        "that is the trust manager, not the issuer."
     )
 
     _USER_TEMPLATE = (
-        "Extract the following three fields from this custodial statement and return ONLY a JSON object.\n\n"
+        "Extract the following fields from this financial statement and return ONLY a JSON object.\n\n"
         "Statement text:\n---\n{text}\n---\n\n"
-        '{{"provider": "custodian/brokerage name from the statement letterhead only", '
-        '"account_number": "account number digits only, no spaces or dashes", '
-        '"statement_date": "statement period end date in MM-DD-YYYY format"}}'
+        '{{"provider": "name of the fund, brokerage, or financial institution from the letterhead or logo", '
+        '"account_number": "the primary account identifier — could be labelled Account Number, Account #, '
+        "SubEntity ID, Fund Code, Client ID, Portfolio Number, or any similar unique identifier. "
+        'Return digits and letters only, no spaces or dashes", '
+        '"statement_date": "statement period end date or valuation date in MM-DD-YYYY format", '
+        '"trust_name": "the trust or client name this statement is addressed to (e.g. The Beethoven Trust, Camden Trust) — '
+        'NOT the trustee company, NOT the fund name"}}'
     )
 
     def _classify(self, text: str, filename: str) -> StatementInfo:
@@ -102,6 +107,9 @@ class PDFParser:
         except json.JSONDecodeError as exc:
             raise ParseError(f"Model returned invalid JSON for {filename}: {raw}") from exc
 
+        if not data.get("provider"):
+            data["provider"] = self._provider_from_filename(filename)
+
         missing = [k for k in ("provider", "account_number", "statement_date") if not data.get(k)]
         if missing:
             raise ParseError(f"Could not extract {', '.join(missing)} from {filename}")
@@ -110,4 +118,13 @@ class PDFParser:
             provider=data["provider"],
             account_number=data["account_number"],
             statement_date=data["statement_date"],
+            trust_name=data.get("trust_name") or None,
         )
+
+    @staticmethod
+    def _provider_from_filename(filename: str) -> str | None:
+        stem = Path(filename).stem
+        parts = [p.strip() for p in stem.split(" - ")]
+        if len(parts) >= 3:
+            return parts[1]
+        return None

@@ -25,10 +25,10 @@ class LiveIndex:
         self._boot()
         self._start_refresh_thread()
 
-    def lookup(self, account_number: str) -> IndexEntry | None:
+    def lookup(self, account_number: str, provider: str = "", trust_name: str = "") -> IndexEntry | None:
         pdf_digits = re.sub(r"\D", "", account_number)
 
-        result = self._search(pdf_digits)
+        result = self._numeric_search(pdf_digits)
         if result is not None:
             return result
 
@@ -37,15 +37,25 @@ class LiveIndex:
             if result is not None:
                 return result
 
-        logger.info("Not found in Box or Excel — rebuilding both from Box...")
+        if provider:
+            result = self._text_search(provider, trust_name)
+            if result is not None:
+                return result
+
+        logger.info("Not found via numeric, Excel, or text match — rebuilding full Box index...")
         self._rebuild()
 
-        result = self._search(pdf_digits)
+        result = self._numeric_search(pdf_digits)
         if result is not None:
             return result
 
         if self._excel:
             result = self._excel_fallback(account_number, pdf_digits)
+            if result is not None:
+                return result
+
+        if provider:
+            result = self._text_search(provider, trust_name)
 
         return result
 
@@ -56,22 +66,57 @@ class LiveIndex:
     def excel_len(self) -> int:
         return len(self._excel) if self._excel else 0
 
-    def _search(self, pdf_digits: str) -> IndexEntry | None:
+    def _numeric_search(self, pdf_digits: str) -> IndexEntry | None:
         with self._lock:
             if pdf_digits in self._index:
                 return self._index[pdf_digits]
             for key, entry in self._index.items():
-                if key and len(key) >= 5 and key in pdf_digits:
+                if key and len(key) >= 5 and key.isdigit() and key in pdf_digits:
                     return entry
             for key, entry in self._index.items():
-                if pdf_digits and len(pdf_digits) >= 5 and pdf_digits in key:
+                if pdf_digits and len(pdf_digits) >= 5 and key.isdigit() and pdf_digits in key:
+                    return entry
+        return None
+
+    def _text_search(self, provider: str, trust_name: str = "") -> IndexEntry | None:
+        provider_norm = re.sub(r"[^a-z0-9]", "", provider.lower())
+        trust_norm = re.sub(r"[^a-z0-9]", "", trust_name.lower()) if trust_name else ""
+
+        if len(provider_norm) < 4:
+            return None
+
+        with self._lock:
+            for entry in self._index.values():
+                subfolder_norm = re.sub(r"[^a-z0-9]", "", entry.account_subfolder.lower())
+                entity_norm = re.sub(r"[^a-z0-9]", "", entry.entity.lower())
+
+                fund_part = (
+                    subfolder_norm[len(entity_norm):]
+                    if subfolder_norm.startswith(entity_norm)
+                    else subfolder_norm
+                )
+
+                provider_match = (
+                    (len(provider_norm) >= 4 and provider_norm in subfolder_norm) or
+                    (len(fund_part) >= 4 and fund_part in provider_norm)
+                )
+
+                if not provider_match:
+                    continue
+
+                trust_match = (
+                    not trust_norm or
+                    trust_norm in entity_norm or
+                    entity_norm in trust_norm
+                )
+
+                if trust_match:
                     return entry
         return None
 
     def _excel_fallback(self, account_number: str, pdf_digits: str) -> IndexEntry | None:
         trust_name = self._excel.lookup_trust(account_number)
         if not trust_name:
-            logger.warning("Account '%s' not found in Box index or Excel checklist.", account_number)
             return None
 
         logger.info("Excel matched account → '%s'. Scanning Box entity...", trust_name)
@@ -84,7 +129,7 @@ class LiveIndex:
             self._index.update(entries)
         self._save_cache(self._index)
 
-        result = self._search(pdf_digits)
+        result = self._numeric_search(pdf_digits)
         if result:
             return result
         return next(iter(entries.values()))

@@ -65,6 +65,10 @@ class BoxIndexBuilder:
                         if acct.type != "folder":
                             continue
                         key = self._extract_key(acct.name)
+                        if not key:
+                            text_key = re.sub(r"[^a-z0-9]", "", acct.name.lower())
+                            if len(text_key) >= 4:
+                                key = text_key
                         if key:
                             entries[key] = IndexEntry(
                                 entity=entity.name,

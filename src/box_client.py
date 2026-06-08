@@ -61,13 +61,19 @@ class BoxUploader:
 
         return self._get_or_create(acct_id, year)
 
+    @staticmethod
+    def _normalize(name: str) -> str:
+        import re
+        return re.sub(r"[^a-z0-9]", "", name.lower())
+
     def upload(self, folder_id: str, local_path: Path, remote_name: str) -> bool:
         existing = {
             item.name
             for item in self._client.folder(folder_id).get_items(limit=1000)
             if item.type == "file"
         }
-        if remote_name in existing:
+        remote_norm = self._normalize(remote_name)
+        if remote_name in existing or any(self._normalize(n) == remote_norm for n in existing):
             return False
         try:
             with open(local_path, "rb") as f:

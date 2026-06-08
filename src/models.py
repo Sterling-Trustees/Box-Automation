@@ -12,6 +12,7 @@ class StatementInfo:
     provider: str
     account_number: str
     statement_date: str
+    trust_name: str | None = None
 
     @property
     def year(self) -> str:
