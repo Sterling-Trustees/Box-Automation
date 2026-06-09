@@ -8,7 +8,6 @@ from src.exceptions import StatementError, IndexLookupError
 
 logger = logging.getLogger(__name__)
 
-
 class StatementProcessor:
     def __init__(self, parser: PDFParser, index: LiveIndex, uploader: BoxUploader) -> None:
         self._parser = parser

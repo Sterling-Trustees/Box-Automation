@@ -8,7 +8,6 @@ from src.processor import StatementProcessor
 
 logger = logging.getLogger(__name__)
 
-
 class DownloadWatcher:
     def __init__(self, folder: Path, processor: StatementProcessor) -> None:
         self._folder = folder
@@ -30,7 +29,6 @@ class DownloadWatcher:
             observer.stop()
             observer.join()
             logger.info("Watcher stopped.")
-
 
 class _PDFEventHandler(FileSystemEventHandler):
     _STABLE_TIMEOUT = 60

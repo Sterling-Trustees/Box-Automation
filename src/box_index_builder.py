@@ -20,7 +20,6 @@ _CIS_VARIANTS = {
     "custodial financial statements",
 }
 
-
 class BoxIndexBuilder:
     _MAX_WORKERS = 3
     _MAX_RETRIES = 5
