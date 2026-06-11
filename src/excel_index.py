@@ -1,7 +1,6 @@
 import io
 import re
 import logging
-from pathlib import Path
 import openpyxl
 
 logger = logging.getLogger(__name__)
@@ -13,15 +12,6 @@ _ACCT_KEYWORDS  = ("account", "fund", "acct", "#")
 class ExcelIndex:
     def __init__(self) -> None:
         self._index: dict[str, str] = {}
-
-    @classmethod
-    def from_paths(cls, paths: list[Path]) -> "ExcelIndex":
-        idx = cls()
-        for path in paths:
-            if path.exists():
-                idx._load_workbook(openpyxl.load_workbook(path, read_only=True, data_only=True), str(path.name))
-        logger.info("Excel index loaded from %d files: %d account mappings", len(paths), len(idx))
-        return idx
 
     @classmethod
     def from_bytes_list(cls, files: list[tuple[str, bytes]]) -> "ExcelIndex":
@@ -70,9 +60,20 @@ class ExcelIndex:
         key = self._normalize(account_number)
         if key in self._index:
             return self._index[key]
-        for k, trust in self._index.items():
-            if len(k) >= 4 and (k in key or key in k):
-                return trust
+        if len(key) < 6:
+            return None
+        matches = {
+            trust
+            for k, trust in self._index.items()
+            if len(k) >= 6 and (k in key or key in k)
+        }
+        if len(matches) == 1:
+            return matches.pop()
+        if len(matches) > 1:
+            logger.warning(
+                "Account '%s' substring-matches %d different trusts in Excel — ambiguous, skipping.",
+                account_number, len(matches),
+            )
         return None
 
     def __len__(self) -> int:

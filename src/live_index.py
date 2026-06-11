@@ -25,39 +25,52 @@ class LiveIndex:
         self._boot()
         self._start_refresh_thread()
 
-    def lookup(self, account_number: str, provider: str = "", trust_name: str = "") -> IndexEntry | None:
+    def lookup(
+        self,
+        account_number: str,
+        provider: str = "",
+        trust_name: str = "",
+        fund_name: str = "",
+    ) -> IndexEntry | None:
         pdf_digits = re.sub(r"\D", "", account_number)
 
-        result = self._numeric_search(pdf_digits)
+        result = self._search_all(account_number, pdf_digits, provider, trust_name, fund_name)
         if result is not None:
             return result
 
-        if self._excel:
-            result = self._excel_fallback(account_number, pdf_digits)
-            if result is not None:
-                return result
-
-        if provider:
-            result = self._text_search(provider, trust_name)
-            if result is not None:
-                return result
-
-        logger.info("Not found via numeric, Excel, or text match — rebuilding full Box index...")
+        logger.info("Not found via numeric, Excel, text, or fund match — rebuilding full Box index...")
         self._rebuild()
 
+        return self._search_all(account_number, pdf_digits, provider, trust_name, fund_name)
+
+    def _search_all(
+        self,
+        account_number: str,
+        pdf_digits: str,
+        provider: str,
+        trust_name: str,
+        fund_name: str,
+    ) -> IndexEntry | None:
         result = self._numeric_search(pdf_digits)
         if result is not None:
             return result
 
         if self._excel:
-            result = self._excel_fallback(account_number, pdf_digits)
+            result = self._excel_fallback(account_number, pdf_digits, provider)
             if result is not None:
                 return result
 
         if provider:
             result = self._text_search(provider, trust_name)
+            if result is not None:
+                return result
 
-        return result
+        if fund_name:
+            result = self._token_search(fund_name, trust_name)
+            if result is not None:
+                return result
+
+        return None
 
     def __len__(self) -> int:
         with self._lock:
@@ -78,51 +91,110 @@ class LiveIndex:
                     return entry
         return None
 
+    _STOP_TOKENS = {
+        "fund", "funds", "ltd", "lp", "llc", "llp", "inc", "the", "of", "and",
+        "class", "series", "units", "trust", "co", "plc",
+    }
+
+    @staticmethod
+    def _norm(text: str) -> str:
+        return re.sub(r"[^a-z0-9]", "", text.lower())
+
+    @classmethod
+    def _tokens(cls, text: str) -> set[str]:
+        return {
+            t for t in re.findall(r"[a-z0-9]+", text.lower())
+            if len(t) >= 3 and t not in cls._STOP_TOKENS
+        }
+
+    def _token_search(self, fund_name: str, trust_name: str) -> IndexEntry | None:
+        if not trust_name:
+            return None
+        fund_tokens = self._tokens(fund_name)
+        if not fund_tokens:
+            return None
+        trust_norm = self._norm(trust_name)
+
+        with self._lock:
+            unique_entries = {
+                (e.entity, e.account_subfolder): e for e in self._index.values()
+            }.values()
+            scored: list[tuple[int, int, IndexEntry]] = []
+            for entry in unique_entries:
+                entity_norm = self._norm(entry.entity)
+                if trust_norm not in entity_norm and entity_norm not in trust_norm:
+                    continue
+                overlap = fund_tokens & self._tokens(entry.account_subfolder)
+                if overlap:
+                    scored.append((len(overlap), max(len(t) for t in overlap), entry))
+
+        if not scored:
+            return None
+        scored.sort(key=lambda s: (s[0], s[1]), reverse=True)
+        top_count, top_len, top_entry = scored[0]
+        if len(scored) > 1 and scored[1][0] == top_count:
+            logger.warning(
+                "Fund '%s' matches multiple folders equally well in '%s' — skipping to avoid a wrong upload.",
+                fund_name, trust_name,
+            )
+            return None
+        if top_count >= 2 or top_len >= 6:
+            return top_entry
+        return None
+
+    def _provider_matches(self, entry: IndexEntry, provider_norm: str) -> bool:
+        subfolder_norm = self._norm(entry.account_subfolder)
+        entity_norm = self._norm(entry.entity)
+        fund_part = (
+            subfolder_norm[len(entity_norm):]
+            if subfolder_norm.startswith(entity_norm)
+            else subfolder_norm
+        )
+        return (
+            (len(provider_norm) >= 4 and provider_norm in subfolder_norm) or
+            (len(fund_part) >= 4 and fund_part in provider_norm)
+        )
+
     def _text_search(self, provider: str, trust_name: str = "") -> IndexEntry | None:
-        provider_norm = re.sub(r"[^a-z0-9]", "", provider.lower())
-        trust_norm = re.sub(r"[^a-z0-9]", "", trust_name.lower()) if trust_name else ""
+        provider_norm = self._norm(provider)
+        trust_norm = self._norm(trust_name) if trust_name else ""
 
         if len(provider_norm) < 4:
             return None
 
+        matches: list[IndexEntry] = []
         with self._lock:
             for entry in self._index.values():
-                subfolder_norm = re.sub(r"[^a-z0-9]", "", entry.account_subfolder.lower())
-                entity_norm = re.sub(r"[^a-z0-9]", "", entry.entity.lower())
-
-                fund_part = (
-                    subfolder_norm[len(entity_norm):]
-                    if subfolder_norm.startswith(entity_norm)
-                    else subfolder_norm
-                )
-
-                provider_match = (
-                    (len(provider_norm) >= 4 and provider_norm in subfolder_norm) or
-                    (len(fund_part) >= 4 and fund_part in provider_norm)
-                )
-
-                if not provider_match:
+                if not self._provider_matches(entry, provider_norm):
                     continue
+                if trust_norm:
+                    entity_norm = self._norm(entry.entity)
+                    if trust_norm in entity_norm or entity_norm in trust_norm:
+                        return entry
+                else:
+                    matches.append(entry)
 
-                trust_match = (
-                    not trust_norm or
-                    trust_norm in entity_norm or
-                    entity_norm in trust_norm
+        if not trust_norm:
+            unique = {(m.entity, m.account_subfolder) for m in matches}
+            if len(unique) == 1:
+                return matches[0]
+            if len(unique) > 1:
+                logger.warning(
+                    "Provider '%s' matches %d folders across different entities and no trust name "
+                    "was extracted to disambiguate — skipping to avoid filing into the wrong trust.",
+                    provider, len(unique),
                 )
-
-                if trust_match:
-                    return entry
         return None
 
-    def _excel_fallback(self, account_number: str, pdf_digits: str) -> IndexEntry | None:
-        trust_name = self._excel.lookup_trust(account_number)
-        if not trust_name:
+    def _excel_fallback(self, account_number: str, pdf_digits: str, provider: str = "") -> IndexEntry | None:
+        excel_trust = self._excel.lookup_trust(account_number)
+        if not excel_trust:
             return None
 
-        logger.info("Excel matched account → '%s'. Scanning Box entity...", trust_name)
-        entries = self._builder.scan_one_entity(trust_name)
+        logger.info("Excel matched account → '%s'. Scanning Box entity...", excel_trust)
+        entries = self._builder.scan_one_entity(excel_trust)
         if not entries:
-            logger.warning("No indexed accounts found in Box for '%s'.", trust_name)
+            logger.warning("No indexed accounts found in Box for '%s'.", excel_trust)
             return None
 
         with self._lock:
@@ -132,7 +204,22 @@ class LiveIndex:
         result = self._numeric_search(pdf_digits)
         if result:
             return result
-        return next(iter(entries.values()))
+
+        if provider:
+            provider_norm = self._norm(provider)
+            candidates = [e for e in entries.values() if self._provider_matches(e, provider_norm)]
+            if len({(c.entity, c.account_subfolder) for c in candidates}) == 1:
+                return candidates[0]
+
+        if len(entries) == 1:
+            return next(iter(entries.values()))
+
+        logger.warning(
+            "Excel matched trust '%s' but the exact account folder could not be confirmed "
+            "(%d candidate folders) — skipping to avoid a wrong upload.",
+            excel_trust, len(entries),
+        )
+        return None
 
     def _boot(self) -> None:
         self._refresh_excel()
@@ -168,9 +255,6 @@ class LiveIndex:
                 self._excel = new_excel
         except Exception as exc:
             logger.warning("Could not refresh Excel from Box: %s", exc)
-
-    def _load_excel(self) -> ExcelIndex | None:
-        return None
 
     def _start_refresh_thread(self) -> None:
         def loop() -> None:

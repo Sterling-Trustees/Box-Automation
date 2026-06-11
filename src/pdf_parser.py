@@ -1,4 +1,5 @@
 import json
+import re
 from pathlib import Path
 import pdfplumber
 import anthropic
@@ -13,32 +14,6 @@ class PDFParser:
 
     def __init__(self, api_key: str) -> None:
         self._client = anthropic.Anthropic(api_key=api_key)
-
-    _SCREEN_SYSTEM = (
-        "You are a document classifier for a trust company. "
-        "Reply with only the single word YES or NO — nothing else."
-    )
-
-    def is_custodial_statement(self, pdf_path: Path) -> bool:
-        text = self._extract_text(pdf_path)
-        if not text.strip():
-            return False
-        response = self._client.messages.create(
-            model=self._MODEL,
-            max_tokens=5,
-            system=self._SCREEN_SYSTEM,
-            messages=[{
-                "role": "user",
-                "content": (
-                    "Is this document a custodial investment or financial statement "
-                    "from a brokerage or financial institution (e.g. Schwab, Fidelity, "
-                    "Morgan Stanley, Pershing, or any other)? Answer YES or NO only.\n\n"
-                    f"Document text:\n---\n{text[:2000]}\n---"
-                ),
-            }],
-        )
-        answer = response.content[0].text.strip().upper()
-        return answer == "YES"
 
     def parse(self, pdf_path: Path) -> StatementInfo:
         text = self._extract_text(pdf_path)
@@ -81,7 +56,10 @@ class PDFParser:
         'Return digits and letters only, no spaces or dashes", '
         '"statement_date": "statement period end date or valuation date in MM-DD-YYYY format", '
         '"trust_name": "the trust or client name this statement is addressed to (e.g. The Beethoven Trust, Camden Trust) — '
-        'NOT the trustee company, NOT the fund name"}}'
+        'NOT the trustee company, NOT the fund name", '
+        '"fund_name": "the specific FUND the investment is held in, if this is a fund or private equity statement '
+        '(e.g. Fenghe Asia (UST) Fund Ltd, Fourthstone QP Opportunity Fund LP, Engine Capital LP) — '
+        'null for regular brokerage accounts"}}'
     )
 
     def _classify(self, text: str, filename: str) -> StatementInfo:
@@ -115,11 +93,22 @@ class PDFParser:
             raise ParseError(f"Could not extract {', '.join(missing)} from {filename}")
 
         return StatementInfo(
-            provider=data["provider"],
-            account_number=data["account_number"],
-            statement_date=data["statement_date"],
-            trust_name=data.get("trust_name") or None,
+            provider=str(data["provider"]).strip(),
+            account_number=str(data["account_number"]).strip(),
+            statement_date=self._normalize_date(str(data["statement_date"]), filename),
+            trust_name=str(data["trust_name"]).strip() if data.get("trust_name") else None,
+            fund_name=str(data["fund_name"]).strip() if data.get("fund_name") else None,
         )
+
+    @staticmethod
+    def _normalize_date(raw: str, filename: str) -> str:
+        m = re.match(r"^\s*(\d{1,2})[-/](\d{1,2})[-/](\d{4})\s*$", raw)
+        if not m:
+            raise ParseError(f"Invalid statement date '{raw}' in {filename}")
+        month, day, year = int(m.group(1)), int(m.group(2)), int(m.group(3))
+        if not (1 <= month <= 12 and 1 <= day <= 31 and 1990 <= year <= 2100):
+            raise ParseError(f"Implausible statement date '{raw}' in {filename}")
+        return f"{month:02d}-{day:02d}-{year}"
 
     @staticmethod
     def _provider_from_filename(filename: str) -> str | None:

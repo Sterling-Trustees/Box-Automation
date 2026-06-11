@@ -13,7 +13,6 @@ class StatementConfig:
     box_client_secret: str
     token_file: Path
     index_cache_path: Path
-    excel_path: Path
 
     @classmethod
     def from_env(cls) -> "StatementConfig":
@@ -26,7 +25,6 @@ class StatementConfig:
             box_client_secret=os.getenv("BOX_CLIENT_SECRET", ""),
             token_file=base / "token_storage.json",
             index_cache_path=base / "index_cache.json",
-            excel_path=base / "checklist_cache.xlsx",
         )
 
     def validate(self) -> None:

@@ -10,16 +10,23 @@ from boxsdk import OAuth2
 
 _REDIRECT_URI = "http://localhost:8080/callback"
 _auth_code: list[str] = []
+_expected_state: list[str] = []
 
 
 class _CallbackHandler(BaseHTTPRequestHandler):
     def do_GET(self) -> None:
-        code = parse_qs(urlparse(self.path).query).get("code", [None])[0]
-        if code:
+        params = parse_qs(urlparse(self.path).query)
+        code = params.get("code", [None])[0]
+        state = params.get("state", [None])[0]
+        if code and _expected_state and state == _expected_state[0]:
             _auth_code.append(code)
-        self.send_response(200)
-        self.end_headers()
-        self.wfile.write(b"<h2>Box authorised. You can close this tab.</h2>")
+            self.send_response(200)
+            self.end_headers()
+            self.wfile.write(b"<h2>Box authorised. You can close this tab.</h2>")
+        else:
+            self.send_response(400)
+            self.end_headers()
+            self.wfile.write(b"<h2>Authorisation failed. Close this tab and try again.</h2>")
 
     def log_message(self, *args) -> None:
         pass
@@ -40,7 +47,8 @@ def main() -> None:
         store_tokens=token_store.save,
     )
 
-    auth_url, _ = oauth.get_authorization_url(_REDIRECT_URI)
+    auth_url, csrf_token = oauth.get_authorization_url(_REDIRECT_URI)
+    _expected_state.append(csrf_token)
     print("Opening Box login in browser...")
     webbrowser.open(auth_url)
 

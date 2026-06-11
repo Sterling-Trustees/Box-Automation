@@ -49,21 +49,22 @@ def main() -> None:
 
     logger.info("Found %d PDF files in: %s", len(pdfs), folder)
 
-    uploaded = 0
-    skipped = 0
-    failed = 0
+    counts = {"uploaded": 0, "skipped": 0, "failed": 0}
 
     for i, pdf in enumerate(pdfs, 1):
         logger.info("[%d/%d] %s", i, len(pdfs), pdf.name)
         try:
-            processor.process(pdf)
-            uploaded += 1
+            result = processor.process(pdf)
         except Exception as exc:
             logger.error("Failed: %s — %s", pdf.name, exc)
-            failed += 1
+            result = "failed"
+        counts[result] = counts.get(result, 0) + 1
 
     logger.info("─" * 50)
-    logger.info("Done.  Uploaded: %d  |  Skipped: %d  |  Failed: %d", uploaded, skipped, failed)
+    logger.info(
+        "Done.  Uploaded: %d  |  Skipped: %d  |  Failed: %d",
+        counts["uploaded"], counts["skipped"], counts["failed"],
+    )
 
 
 if __name__ == "__main__":

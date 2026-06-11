@@ -1,4 +1,6 @@
 import json
+import os
+import re
 from pathlib import Path
 from boxsdk import OAuth2, Client
 from boxsdk.exception import BoxAPIException
@@ -12,6 +14,10 @@ class TokenStore:
         self._path.write_text(
             json.dumps({"access_token": access_token, "refresh_token": refresh_token})
         )
+        try:
+            os.chmod(self._path, 0o600)
+        except OSError:
+            pass
 
     def load(self) -> dict:
         try:
@@ -61,19 +67,38 @@ class BoxUploader:
 
         return self._get_or_create(acct_id, year)
 
+    _DATE_RX = re.compile(r"(?<!\d)(\d{1,2})([-._/ ])(\d{1,2})\2(\d{2,4})(?!\d)")
+
     @staticmethod
     def _normalize(name: str) -> str:
-        import re
         return re.sub(r"[^a-z0-9]", "", name.lower())
 
+    @classmethod
+    def _date_key(cls, name: str) -> str | None:
+        for m in cls._DATE_RX.finditer(name):
+            month, day, year = int(m.group(1)), int(m.group(3)), int(m.group(4))
+            if year < 100:
+                year += 2000
+            if 1 <= month <= 12 and 1 <= day <= 31 and 1990 <= year <= 2100:
+                return f"{month:02d}-{year}"
+        return None
+
+    def _is_duplicate(self, remote_name: str, existing: list[str]) -> bool:
+        remote_norm = self._normalize(remote_name)
+        if any(self._normalize(n) == remote_norm for n in existing):
+            return True
+        date_key = self._date_key(remote_name)
+        if date_key and any(self._date_key(n) == date_key for n in existing):
+            return True
+        return False
+
     def upload(self, folder_id: str, local_path: Path, remote_name: str) -> bool:
-        existing = {
+        existing = [
             item.name
             for item in self._client.folder(folder_id).get_items(limit=1000)
             if item.type == "file"
-        }
-        remote_norm = self._normalize(remote_name)
-        if remote_name in existing or any(self._normalize(n) == remote_norm for n in existing):
+        ]
+        if self._is_duplicate(remote_name, existing):
             return False
         try:
             with open(local_path, "rb") as f:
