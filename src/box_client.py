@@ -71,6 +71,8 @@ class BoxUploader:
         return self._get_or_create(acct_id, year)
 
     _DATE_RX = re.compile(r"(?<!\d)(\d{1,2})([-._/ ])(\d{1,2})\2(\d{2,4})(?!\d)")
+    _MONTH_YEAR_RX = re.compile(r"(?<!\d)(\d{1,2})[-._/ ](\d{4})(?!\d)")
+    _YEAR_MONTH_RX = re.compile(r"(?<!\d)(\d{4})[-._/ ](\d{1,2})(?!\d)")
 
     @staticmethod
     def _normalize(name: str) -> str:
@@ -83,6 +85,14 @@ class BoxUploader:
             if year < 100:
                 year += 2000
             if 1 <= month <= 12 and 1 <= day <= 31 and 1990 <= year <= 2100:
+                return f"{month:02d}-{year}"
+        for m in cls._MONTH_YEAR_RX.finditer(name):
+            month, year = int(m.group(1)), int(m.group(2))
+            if 1 <= month <= 12 and 1990 <= year <= 2100:
+                return f"{month:02d}-{year}"
+        for m in cls._YEAR_MONTH_RX.finditer(name):
+            year, month = int(m.group(1)), int(m.group(2))
+            if 1 <= month <= 12 and 1990 <= year <= 2100:
                 return f"{month:02d}-{year}"
         return None
 

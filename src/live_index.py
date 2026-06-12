@@ -117,9 +117,30 @@ class LiveIndex:
         "statement", "statements", "stmt", "stmts", "account", "accounts", "acct",
     }
 
+    _TRUST_STOP_TOKENS = {"the", "trust", "tst", "of", "u", "a", "ua", "dtd", "ttee", "ttees", "llc"}
+
     @staticmethod
     def _norm(text: str) -> str:
         return re.sub(r"[^a-z0-9]", "", text.lower())
+
+    @classmethod
+    def _trust_matches(cls, trust_name: str, entity: str) -> bool:
+        t_norm, e_norm = cls._norm(trust_name), cls._norm(entity)
+        if not t_norm or not e_norm:
+            return False
+        if t_norm in e_norm or e_norm in t_norm:
+            return True
+        t_tokens = [t for t in re.findall(r"[a-z0-9]+", trust_name.lower()) if t not in cls._TRUST_STOP_TOKENS]
+        e_tokens = [t for t in re.findall(r"[a-z0-9]+", entity.lower()) if t not in cls._TRUST_STOP_TOKENS]
+        if not t_tokens or not e_tokens:
+            return False
+        short, long_ = (t_tokens, e_tokens) if len(t_tokens) <= len(e_tokens) else (e_tokens, t_tokens)
+
+        def tok_match(a: str, b: str) -> bool:
+            return a == b or (len(a) >= 3 and b.startswith(a)) or (len(b) >= 3 and a.startswith(b))
+
+        matched = sum(1 for s in short if any(tok_match(s, l) for l in long_))
+        return matched == len(short) and matched >= 2
 
     @classmethod
     def _tokens(cls, text: str) -> set[str]:
@@ -134,7 +155,6 @@ class LiveIndex:
         fund_tokens = self._tokens(fund_name)
         if not fund_tokens:
             return None
-        trust_norm = self._norm(trust_name)
 
         with self._lock:
             unique_entries = {
@@ -142,8 +162,7 @@ class LiveIndex:
             }.values()
             scored: list[tuple[int, int, IndexEntry]] = []
             for entry in unique_entries:
-                entity_norm = self._norm(entry.entity)
-                if trust_norm not in entity_norm and entity_norm not in trust_norm:
+                if not self._trust_matches(trust_name, entry.entity):
                     continue
                 overlap = fund_tokens & self._tokens(entry.account_subfolder)
                 if overlap:
@@ -189,8 +208,7 @@ class LiveIndex:
                 if not self._provider_matches(entry, provider_norm):
                     continue
                 if trust_norm:
-                    entity_norm = self._norm(entry.entity)
-                    if trust_norm in entity_norm or entity_norm in trust_norm:
+                    if self._trust_matches(trust_name, entry.entity):
                         return entry
                 else:
                     matches.append(entry)
@@ -230,13 +248,12 @@ class LiveIndex:
         return None
 
     def _trust_scoped_account_match(self, trust_name: str, pdf_digits: str) -> IndexEntry | None:
-        trust_norm = self._norm(trust_name)
-        if not trust_norm:
+        if not self._norm(trust_name):
             return None
         with self._lock:
             scoped = [
                 e for e in self._index.values()
-                if trust_norm in self._norm(e.entity) or self._norm(e.entity) in trust_norm
+                if self._trust_matches(trust_name, e.entity)
             ]
         return self._local_account_match(scoped, pdf_digits)
 

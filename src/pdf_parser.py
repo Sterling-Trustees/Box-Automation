@@ -79,7 +79,9 @@ class PDFParser:
         '"account_number": "the primary account identifier — could be labelled Account Number, Account #, '
         "SubEntity ID, Fund Code, Client ID, Portfolio Number, or any similar unique identifier. "
         'Return digits and letters only, no spaces or dashes", '
-        '"statement_date": "statement period end date or valuation date in MM-DD-YYYY format", '
+        '"statement_date": "the statement period END date (closing date) in MM-DD-YYYY format. '
+        "Statements often show two dates — an opening/beginning date and a closing/ending date. "
+        'ALWAYS use the LATER one (the period end). For a statement covering Feb 1 to Feb 27, return 02-27", '
         '"trust_name": "the trust or client name this statement is addressed to (e.g. The Beethoven Trust, Camden Trust) — '
         'NOT the trustee company, NOT the fund name", '
         '"fund_name": "the specific FUND the investment is held in, if this is a fund or private equity statement '
