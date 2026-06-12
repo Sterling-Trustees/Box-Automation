@@ -1,3 +1,4 @@
+import base64
 import json
 import re
 from pathlib import Path
@@ -9,17 +10,41 @@ from src.exceptions import ParseError
 
 class PDFParser:
     _MODEL = "claude-haiku-4-5-20251001"
-    _MAX_PAGES = 5
-    _MAX_CHARS = 5000
+    _MAX_PAGES = 8
+    _MAX_CHARS = 15000
+    _MAX_PDF_BYTES = 30_000_000
 
     def __init__(self, api_key: str) -> None:
         self._client = anthropic.Anthropic(api_key=api_key)
 
     def parse(self, pdf_path: Path) -> StatementInfo:
         text = self._extract_text(pdf_path)
-        if not text.strip():
-            raise ParseError(f"No text in {pdf_path.name} — may be a scanned image PDF.")
-        return self._classify(text, pdf_path.name)
+        if text.strip():
+            content = self._USER_TEMPLATE.format(text=text[: self._MAX_CHARS])
+        else:
+            content = self._document_content(pdf_path)
+        return self._classify(content, pdf_path.name)
+
+    def _document_content(self, pdf_path: Path) -> list:
+        data = pdf_path.read_bytes()
+        if len(data) > self._MAX_PDF_BYTES:
+            raise ParseError(f"Scanned PDF too large to process: {pdf_path.name}")
+        return [
+            {
+                "type": "document",
+                "source": {
+                    "type": "base64",
+                    "media_type": "application/pdf",
+                    "data": base64.b64encode(data).decode(),
+                },
+            },
+            {
+                "type": "text",
+                "text": self._USER_TEMPLATE.format(
+                    text="(no machine-readable text — read the attached scanned statement)"
+                ),
+            },
+        ]
 
     def _extract_text(self, pdf_path: Path) -> str:
         parts: list[str] = []
@@ -62,15 +87,12 @@ class PDFParser:
         'null for regular brokerage accounts"}}'
     )
 
-    def _classify(self, text: str, filename: str) -> StatementInfo:
+    def _classify(self, content: str | list, filename: str) -> StatementInfo:
         response = self._client.messages.create(
             model=self._MODEL,
             max_tokens=256,
             system=self._SYSTEM_PROMPT,
-            messages=[{
-                "role": "user",
-                "content": self._USER_TEMPLATE.format(text=text[: self._MAX_CHARS]),
-            }],
+            messages=[{"role": "user", "content": content}],
         )
         try:
             raw = response.content[0].text.strip()

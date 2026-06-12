@@ -61,9 +61,12 @@ class BoxUploader:
         if not cis_id:
             raise BoxNavigationError(f"'{cis_folder}' not found inside '{entity}'")
 
-        acct_id = self._find_exact(cis_id, account_subfolder)
-        if not acct_id:
-            raise BoxNavigationError(f"Account folder not found: '{account_subfolder}'")
+        acct_id = cis_id
+        for part in account_subfolder.split("/"):
+            next_id = self._find_exact(acct_id, part)
+            if not next_id:
+                raise BoxNavigationError(f"Account folder not found: '{part}' (path: '{account_subfolder}')")
+            acct_id = next_id
 
         return self._get_or_create(acct_id, year)
 

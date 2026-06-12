@@ -38,10 +38,25 @@ class LiveIndex:
         if result is not None:
             return result
 
-        logger.info("Not found via numeric, Excel, text, or fund match — rebuilding full Box index...")
+        if not self._confirm_rebuild():
+            logger.info("Rebuild declined — file will be skipped.")
+            return None
+
+        logger.info("Rebuilding full Box index...")
         self._rebuild()
 
         return self._search_all(account_number, pdf_digits, provider, trust_name, fund_name)
+
+    @staticmethod
+    def _confirm_rebuild() -> bool:
+        try:
+            answer = input(
+                "\nAccount not found via any lookup layer.\n"
+                "Rebuild the full Box index now? This takes a few minutes. [y/n]: "
+            )
+        except (EOFError, OSError):
+            return False
+        return answer.strip().lower() in ("y", "yes")
 
     def _search_all(
         self,
@@ -70,6 +85,11 @@ class LiveIndex:
             if result is not None:
                 return result
 
+        if trust_name:
+            result = self._trust_scoped_account_match(trust_name, pdf_digits)
+            if result is not None:
+                return result
+
         return None
 
     def __len__(self) -> int:
@@ -94,6 +114,7 @@ class LiveIndex:
     _STOP_TOKENS = {
         "fund", "funds", "ltd", "lp", "llc", "llp", "inc", "the", "of", "and",
         "class", "series", "units", "trust", "co", "plc",
+        "statement", "statements", "stmt", "stmts", "account", "accounts", "acct",
     }
 
     @staticmethod
@@ -186,6 +207,39 @@ class LiveIndex:
                 )
         return None
 
+    @staticmethod
+    def _is_year_like(digits: str) -> bool:
+        return len(digits) == 4 and 1990 <= int(digits) <= 2035
+
+    @classmethod
+    def _account_digits_match(cls, subfolder: str, pdf_digits: str) -> bool:
+        if len(pdf_digits) < 4:
+            return False
+        for run in re.findall(r"\d{4,}", subfolder):
+            if cls._is_year_like(run):
+                continue
+            if run in pdf_digits:
+                return True
+        return False
+
+    def _local_account_match(self, entries, pdf_digits: str) -> IndexEntry | None:
+        unique = {(e.entity, e.account_subfolder): e for e in entries}.values()
+        matched = [e for e in unique if self._account_digits_match(e.account_subfolder, pdf_digits)]
+        if len(matched) == 1:
+            return matched[0]
+        return None
+
+    def _trust_scoped_account_match(self, trust_name: str, pdf_digits: str) -> IndexEntry | None:
+        trust_norm = self._norm(trust_name)
+        if not trust_norm:
+            return None
+        with self._lock:
+            scoped = [
+                e for e in self._index.values()
+                if trust_norm in self._norm(e.entity) or self._norm(e.entity) in trust_norm
+            ]
+        return self._local_account_match(scoped, pdf_digits)
+
     def _excel_fallback(self, account_number: str, pdf_digits: str, provider: str = "") -> IndexEntry | None:
         excel_trust = self._excel.lookup_trust(account_number)
         if not excel_trust:
@@ -205,10 +259,15 @@ class LiveIndex:
         if result:
             return result
 
+        result = self._local_account_match(entries.values(), pdf_digits)
+        if result:
+            return result
+
         if provider:
-            provider_norm = self._norm(provider)
-            candidates = [e for e in entries.values() if self._provider_matches(e, provider_norm)]
-            if len({(c.entity, c.account_subfolder) for c in candidates}) == 1:
+            provider_tokens = self._tokens(provider)
+            unique = {(e.entity, e.account_subfolder): e for e in entries.values()}.values()
+            candidates = [e for e in unique if provider_tokens & self._tokens(e.account_subfolder)]
+            if len(candidates) == 1:
                 return candidates[0]
 
         if len(entries) == 1:

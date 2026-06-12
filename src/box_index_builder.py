@@ -55,6 +55,13 @@ class BoxIndexBuilder:
         logger.info("Index built: %d accounts", len(index))
         return index
 
+    _YEAR_NAME_RX = re.compile(r"^(19|20)\d{2}([- ].*)?$")
+    _AUX_MARKERS = (
+        "account opening", "account documents", "historical statement",
+        "household statement", "dividend report", "prior trustee",
+        "paperwork", "authorization", "archive", "correspondence",
+    )
+
     def _scan_entity(self, entity) -> dict[str, IndexEntry]:
         entries: dict[str, IndexEntry] = {}
         try:
@@ -63,21 +70,50 @@ class BoxIndexBuilder:
                     for acct in self._get_items_with_retry(item.id, limit=500):
                         if acct.type != "folder":
                             continue
-                        key = self._extract_key(acct.name)
-                        if not key:
-                            text_key = re.sub(r"[^a-z0-9]", "", acct.name.lower())
-                            if len(text_key) >= 4:
-                                key = text_key
-                        if key:
-                            entries[key] = IndexEntry(
-                                entity=entity.name,
-                                cis_folder=item.name,
-                                account_subfolder=acct.name,
-                            )
+                        if acct.name.strip().lower().startswith("closed"):
+                            continue
+                        self._add_entry(entries, entity.name, item.name, acct.name)
+                        if self._should_descend(acct.name):
+                            for child in self._get_items_with_retry(acct.id, limit=500):
+                                if child.type != "folder":
+                                    continue
+                                child_name = child.name.strip()
+                                if child_name.lower().startswith("closed"):
+                                    continue
+                                if self._YEAR_NAME_RX.match(child_name):
+                                    continue
+                                self._add_entry(
+                                    entries, entity.name, item.name,
+                                    f"{acct.name}/{child.name}",
+                                )
                     break
         except Exception as exc:
             logger.debug("Skipped entity '%s': %s", entity.name, exc)
         return entries
+
+    def _add_entry(self, entries: dict, entity_name: str, cis_name: str, subfolder_path: str) -> None:
+        leaf = subfolder_path.rsplit("/", 1)[-1]
+        leaf_lower = leaf.strip().lower()
+        if any(marker in leaf_lower for marker in self._AUX_MARKERS):
+            return
+        key = self._extract_key(leaf)
+        if not key:
+            text_key = re.sub(r"[^a-z0-9]", "", subfolder_path.lower())
+            if len(text_key) >= 4:
+                key = text_key
+        if key:
+            entries[key] = IndexEntry(
+                entity=entity_name,
+                cis_folder=cis_name,
+                account_subfolder=subfolder_path,
+            )
+
+    @classmethod
+    def _should_descend(cls, name: str) -> bool:
+        for run in re.findall(r"\d{4,}", name):
+            if not (1990 <= int(run[:4]) <= 2035 and len(run) == 4):
+                return False
+        return True
 
     def _get_items_with_retry(self, folder_id: str, limit: int):
         for attempt in range(self._MAX_RETRIES):

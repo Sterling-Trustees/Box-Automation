@@ -22,7 +22,7 @@ class _CallbackHandler(BaseHTTPRequestHandler):
             _auth_code.append(code)
             self.send_response(200)
             self.end_headers()
-            self.wfile.write(b"<h2>Box authorised. You can close this tab.</h2>")
+            self.wfile.write(b"<h2>Box authorised. You can close this tab bro :).</h2>")
         else:
             self.send_response(400)
             self.end_headers()

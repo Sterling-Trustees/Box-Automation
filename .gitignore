@@ -3,6 +3,7 @@ token.json
 index_cache.json
 checklist_cache.xlsx
 token_storage.json
+Understand names/
 
 __pycache__/
 *.py[cod]
